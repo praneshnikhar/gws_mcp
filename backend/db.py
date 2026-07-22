@@ -57,3 +57,13 @@ def get_user_by_email(email: str) -> Optional[dict]:
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def update_user_token(email: str, google_token: str):
+    conn = get_conn()
+    conn.execute(
+        "UPDATE users SET google_token = ? WHERE email = ?",
+        (google_token, email),
+    )
+    conn.commit()
+    conn.close()

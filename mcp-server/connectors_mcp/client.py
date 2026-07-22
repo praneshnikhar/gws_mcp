@@ -7,22 +7,20 @@ BASE_URL = os.environ.get("CONNECTORS_API_URL", "http://localhost:8321")
 API_KEY = os.environ.get("CONNECTORS_API_KEY", "")
 
 
+def _headers(api_key: str) -> dict:
+    return {"Authorization": f"Bearer {api_key}"}
+
+
 def _get(api_key: str, path: str, params: dict = None) -> dict:
     url = f"{BASE_URL}{path}"
-    if params is None:
-        params = {}
-    params["api_key"] = api_key
-    resp = httpx.get(url, params=params, timeout=30)
+    resp = httpx.get(url, params=params, headers=_headers(api_key), timeout=30)
     resp.raise_for_status()
     return resp.json()
 
 
 def _post(api_key: str, path: str, body: dict, params: dict = None) -> dict:
     url = f"{BASE_URL}{path}"
-    if params is None:
-        params = {}
-    params["api_key"] = api_key
-    resp = httpx.post(url, json=body, params=params, timeout=30)
+    resp = httpx.post(url, json=body, params=params, headers=_headers(api_key), timeout=30)
     resp.raise_for_status()
     return resp.json()
 

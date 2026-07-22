@@ -1,26 +1,48 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from backend.auth import refresh_google_token, SCOPES
 
 
-def _get_service(token_json: str):
-    token = refresh_google_token(token_json)
+def _get_service(token_json: str, email: str | None = None):
+    try:
+        token = refresh_google_token(token_json, email)
+    except Exception as e:
+        raise RuntimeError(f"Failed to refresh Google token: {e}")
     creds = Credentials.from_authorized_user_info(json.loads(token), SCOPES)
     return build("calendar", "v3", credentials=creds)
 
 
-def list_events(token_json: str, start: str, end: str, max_results: int = 50) -> list[dict]:
-    service = _get_service(token_json)
-    events = service.events().list(
-        calendarId="primary",
-        timeMin=start,
-        timeMax=end,
-        maxResults=max_results,
-        singleEvents=True,
-        orderBy="startTime",
-    ).execute()
+def _handle_google_error(e: HttpError, action: str):
+    if e.resp.status == 403:
+        raise RuntimeError(f"Insufficient permissions to {action}. Re-authentication may be required.")
+    if e.resp.status == 404:
+        raise RuntimeError(f"Resource not found while trying to {action}.")
+    if e.resp.status == 429:
+        raise RuntimeError(f"Google API rate limit exceeded. Try again later.")
+    raise RuntimeError(f"Google API error while {action}: {e.resp.status} {e.reason}")
+
+
+def list_events(token_json: str, start: str, end: str, max_results: int = 50,
+                email: str | None = None) -> list[dict]:
+    try:
+        service = _get_service(token_json, email)
+    except RuntimeError as e:
+        raise
+
+    try:
+        events = service.events().list(
+            calendarId="primary",
+            timeMin=start,
+            timeMax=end,
+            maxResults=max_results,
+            singleEvents=True,
+            orderBy="startTime",
+        ).execute()
+    except HttpError as e:
+        _handle_google_error(e, "listing calendar events")
 
     result = []
     for event in events.get("items", []):
@@ -38,10 +60,14 @@ def list_events(token_json: str, start: str, end: str, max_results: int = 50) ->
 
 
 def create_event(token_json: str, summary: str, start: str, end: str,
-                 timezone: str = "UTC", description: str = None,
-                 location: str = None, attendees: list[str] = None,
-                 reminders_minutes: list[int] = None) -> dict:
-    service = _get_service(token_json)
+                 timezone: str = "UTC", description: str | None = None,
+                 location: str | None = None, attendees: list[str] | None = None,
+                 reminders_minutes: list[int] | None = None,
+                 email: str | None = None) -> dict:
+    try:
+        service = _get_service(token_json, email)
+    except RuntimeError as e:
+        raise
 
     event_body = {
         "summary": summary,
@@ -60,7 +86,11 @@ def create_event(token_json: str, summary: str, start: str, end: str,
             "overrides": [{"method": "popup", "minutes": m} for m in reminders_minutes],
         }
 
-    created = service.events().insert(calendarId="primary", body=event_body).execute()
+    try:
+        created = service.events().insert(calendarId="primary", body=event_body).execute()
+    except HttpError as e:
+        _handle_google_error(e, "creating calendar event")
+
     return {
         "id": created["id"],
         "summary": created.get("summary"),
@@ -71,8 +101,12 @@ def create_event(token_json: str, summary: str, start: str, end: str,
 
 
 def get_availability(token_json: str, start: str, end: str,
-                     duration_minutes: int = 30, timezone: str = "UTC") -> list[dict]:
-    service = _get_service(token_json)
+                     duration_minutes: int = 30, timezone: str = "UTC",
+                     email: str | None = None) -> list[dict]:
+    try:
+        service = _get_service(token_json, email)
+    except RuntimeError as e:
+        raise
 
     body = {
         "timeMin": start,
@@ -80,10 +114,14 @@ def get_availability(token_json: str, start: str, end: str,
         "timeZone": timezone,
         "items": [{"id": "primary"}],
     }
-    result = service.freebusy().query(body=body).execute()
+
+    try:
+        result = service.freebusy().query(body=body).execute()
+    except HttpError as e:
+        _handle_google_error(e, "checking availability")
+
     busy = result["calendars"].get("primary", {}).get("busy", [])
 
-    from datetime import datetime, timedelta
     start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
     end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
     slot_duration = timedelta(minutes=duration_minutes)

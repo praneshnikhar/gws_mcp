@@ -83,11 +83,16 @@ def exchange_code(code: str, state: str, redirect_uri: str = "http://localhost:8
     }
 
 
-def refresh_google_token(token_json: str) -> str:
+def refresh_google_token(token_json: str, email: str | None = None) -> str:
     creds = Credentials.from_authorized_user_info(json.loads(token_json), SCOPES)
     if creds.expired and creds.refresh_token:
         creds.refresh(GoogleRequest())
-    return creds.to_json()
+        new_token = creds.to_json()
+        if email:
+            from backend.db import update_user_token
+            update_user_token(email, new_token)
+        return new_token
+    return token_json
 
 
 def _get_email(creds: Credentials) -> str:

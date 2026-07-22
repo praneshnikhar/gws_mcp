@@ -6,15 +6,66 @@ Start:  uvicorn backend.main:app --reload --port 8321
 
 import os
 import secrets
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import RedirectResponse, JSONResponse
+import logging
+import time
+import uuid
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from backend.db import init_db, save_user, get_user_by_api_key
 from backend.auth import get_auth_url, exchange_code
 from backend.api import gmail, calendar
 
-app = FastAPI(title="connectors.ai", version="0.1.0")
+
+# ── Logging ──────────────────────────────────────────────────────────────
+
+class JSONFormatter:
+    def format(self, record: logging.LogRecord) -> str:
+        import json
+        log = {
+            "t": record.created,
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if hasattr(record, "req_id"):
+            log["req_id"] = record.req_id
+        if record.exc_info and record.exc_info[0]:
+            log["exc"] = self._format_exc(record.exc_info)
+        return json.dumps(log, default=str)
+
+    def _format_exc(self, exc_info):
+        import traceback
+        return "".join(traceback.format_exception(*exc_info))
+
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(JSONFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
+log = logging.getLogger("gws_mcp")
+
+
+# ── App setup ────────────────────────────────────────────────────────────
+
+limiter = Limiter(key_func=get_remote_address)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    log.info("db_initialized")
+    yield
+
+
+app = FastAPI(title="gws_mcp", version="0.1.0", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,12 +76,34 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-async def startup():
-    init_db()
+# ── Request ID middleware ────────────────────────────────────────────────
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    req_id = request.headers.get("X-Request-Id", uuid.uuid4().hex[:12])
+    start = time.time()
+    response = await call_next(request)
+    elapsed = time.time() - start
+    response.headers["X-Request-Id"] = req_id
+    log.info("request", extra={"req_id": req_id, "method": request.method, "path": request.url.path, "status": response.status_code, "elapsed_ms": round(elapsed * 1000)})
+    return response
 
 
-# ── Auth ────────────────────────────────────────────────────────────────
+# ── Auth dependency ──────────────────────────────────────────────────────
+
+async def require_user(authorization: str | None = Header(None)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authorization header must use Bearer scheme")
+    api_key = authorization.removeprefix("Bearer ").strip()
+    user = get_user_by_api_key(api_key)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return user
+
+
+# ── Auth routes ──────────────────────────────────────────────────────────
 
 @app.get("/auth/login")
 async def login():
@@ -39,7 +112,7 @@ async def login():
 
 
 @app.get("/auth/callback")
-async def callback(code: str = Query(...), state: str = Query(...)):
+async def callback(code: str, state: str):
     user_info = exchange_code(code, state)
     api_key = "cnx_" + secrets.token_urlsafe(32)
     save_user(
@@ -55,93 +128,137 @@ async def callback(code: str = Query(...), state: str = Query(...)):
     })
 
 
-# ── Auth middleware ─────────────────────────────────────────────────────
-
-def _require_user(api_key: str) -> dict:
-    user = get_user_by_api_key(api_key)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return user
-
-
-# ── Email ───────────────────────────────────────────────────────────────
+# ── Email routes ─────────────────────────────────────────────────────────
 
 @app.get("/api/email/list")
+@limiter.limit("60/minute")
 async def email_list(
-    max_results: int = Query(20, ge=1, le=100),
-    query: str = Query(""),
-    api_key: str = Query(...),
+    request: Request,
+    max_results: int = 20,
+    query: str = "",
+    user: dict = Depends(require_user),
 ):
-    user = _require_user(api_key)
-    messages = gmail.list_messages(user["google_token"], max_results, query)
-    return {"messages": messages}
+    try:
+        messages = gmail.list_messages(user["google_token"], max_results, query, email=user["email"])
+        return {"messages": messages}
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.post("/api/email/send")
-async def email_send(body: dict, api_key: str = Query(...)):
-    user = _require_user(api_key)
-    result = gmail.send_message(
-        user["google_token"],
-        to=body["to"],
-        subject=body["subject"],
-        body=body["body"],
-        cc=body.get("cc"),
-        bcc=body.get("bcc"),
-    )
-    return result
+@limiter.limit("30/minute")
+async def email_send(
+    request: Request,
+    body: dict,
+    user: dict = Depends(require_user),
+):
+    errors = []
+    if not body.get("to"):
+        errors.append("Field 'to' is required")
+    if not body.get("subject"):
+        errors.append("Field 'subject' is required")
+    if not body.get("body"):
+        errors.append("Field 'body' is required")
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors))
+
+    try:
+        result = gmail.send_message(
+            user["google_token"],
+            to=body["to"],
+            subject=body["subject"],
+            body=body["body"],
+            cc=body.get("cc"),
+            bcc=body.get("bcc"),
+            email=user["email"],
+        )
+        return result
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/api/email/thread/{thread_id}")
-async def email_thread(thread_id: str, api_key: str = Query(...)):
-    user = _require_user(api_key)
-    messages = gmail.get_thread(user["google_token"], thread_id)
-    return {"messages": messages}
+async def email_thread(
+    request: Request,
+    thread_id: str,
+    user: dict = Depends(require_user),
+):
+    try:
+        messages = gmail.get_thread(user["google_token"], thread_id, email=user["email"])
+        return {"messages": messages}
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
-# ── Calendar ────────────────────────────────────────────────────────────
+# ── Calendar routes ──────────────────────────────────────────────────────
 
 @app.get("/api/calendar/events")
+@limiter.limit("60/minute")
 async def calendar_events(
-    start: str = Query(...),
-    end: str = Query(...),
-    api_key: str = Query(...),
+    request: Request,
+    start: str,
+    end: str,
+    user: dict = Depends(require_user),
 ):
-    user = _require_user(api_key)
-    events = calendar.list_events(user["google_token"], start, end)
-    return {"events": events}
+    try:
+        events = calendar.list_events(user["google_token"], start, end, email=user["email"])
+        return {"events": events}
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.post("/api/calendar/events")
-async def calendar_create_event(body: dict, api_key: str = Query(...)):
-    user = _require_user(api_key)
-    event = calendar.create_event(
-        user["google_token"],
-        summary=body["summary"],
-        start=body["start"],
-        end=body["end"],
-        timezone=body.get("timezone", "UTC"),
-        description=body.get("description"),
-        location=body.get("location"),
-        attendees=body.get("attendees"),
-    )
-    return event
+@limiter.limit("30/minute")
+async def calendar_create_event(
+    request: Request,
+    body: dict,
+    user: dict = Depends(require_user),
+):
+    errors = []
+    if not body.get("summary"):
+        errors.append("Field 'summary' is required")
+    if not body.get("start"):
+        errors.append("Field 'start' is required")
+    if not body.get("end"):
+        errors.append("Field 'end' is required")
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors))
+
+    try:
+        event = calendar.create_event(
+            user["google_token"],
+            summary=body["summary"],
+            start=body["start"],
+            end=body["end"],
+            timezone=body.get("timezone", "UTC"),
+            description=body.get("description"),
+            location=body.get("location"),
+            attendees=body.get("attendees"),
+        )
+        return event
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/api/calendar/availability")
+@limiter.limit("60/minute")
 async def calendar_availability(
-    start: str = Query(...),
-    end: str = Query(...),
-    duration_minutes: int = Query(30),
-    api_key: str = Query(...),
+    request: Request,
+    start: str,
+    end: str,
+    duration_minutes: int = 30,
+    user: dict = Depends(require_user),
 ):
-    user = _require_user(api_key)
-    slots = calendar.get_availability(
-        user["google_token"], start, end, duration_minutes
-    )
-    return {"slots": slots}
+    try:
+        slots = calendar.get_availability(
+            user["google_token"], start, end, duration_minutes, email=user["email"],
+        )
+        return {"slots": slots}
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
-# ── Health ──────────────────────────────────────────────────────────────
+# ── Health ───────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
