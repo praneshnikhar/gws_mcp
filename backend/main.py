@@ -18,7 +18,10 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from backend.db import init_db, save_user, get_user_by_api_key
+from backend.db import (
+    init_db, save_user, get_user_by_api_key,
+    set_working_hours, get_working_hours, delete_working_hours,
+)
 from backend.auth import get_auth_url, exchange_code
 from backend.api import gmail, calendar
 
@@ -337,14 +340,33 @@ async def calendar_events(
     end: str,
     calendar_id: str = "primary",
     max_results: int = 50,
+    single_events: bool = True,
     user: dict = Depends(require_user),
 ):
     try:
         events = calendar.list_events(
             user["google_token"], start, end, calendar_id=calendar_id,
-            max_results=max_results, email=user["email"],
+            max_results=max_results, single_events=single_events,
+            email=user["email"],
         )
         return {"events": events}
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/calendar/events/{event_id}")
+@limiter.limit("60/minute")
+async def calendar_get_event(
+    request: Request,
+    event_id: str,
+    calendar_id: str = "primary",
+    user: dict = Depends(require_user),
+):
+    try:
+        event = calendar.get_event(
+            user["google_token"], event_id, calendar_id=calendar_id, email=user["email"],
+        )
+        return event
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -376,6 +398,7 @@ async def calendar_create_event(
             description=body.get("description"),
             location=body.get("location"),
             attendees=body.get("attendees"),
+            recurrence=body.get("recurrence"),
             calendar_id=body.get("calendar_id", "primary"),
             email=user["email"],
         )
@@ -403,6 +426,7 @@ async def calendar_update_event(
             description=body.get("description"),
             location=body.get("location"),
             attendees=body.get("attendees"),
+            recurrence=body.get("recurrence"),
             calendar_id=body.get("calendar_id", "primary"),
             email=user["email"],
         )
@@ -436,16 +460,63 @@ async def calendar_availability(
     end: str,
     duration_minutes: int = 30,
     calendar_id: str = "primary",
+    working_hours_only: bool = False,
     user: dict = Depends(require_user),
 ):
     try:
         slots = calendar.get_availability(
             user["google_token"], start, end, duration_minutes,
-            calendar_id=calendar_id, email=user["email"],
+            calendar_id=calendar_id, working_hours_only=working_hours_only,
+            email=user["email"],
         )
         return {"slots": slots}
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+# ── Working hours routes ─────────────────────────────────────────────────
+
+@app.get("/api/working-hours")
+@limiter.limit("30/minute")
+async def working_hours_get(
+    request: Request,
+    user: dict = Depends(require_user),
+):
+    hours = get_working_hours(user["email"])
+    return {"working_hours": hours}
+
+
+@app.post("/api/working-hours")
+@limiter.limit("30/minute")
+async def working_hours_set(
+    request: Request,
+    body: dict,
+    user: dict = Depends(require_user),
+):
+    day = body.get("day_of_week")
+    if day is None or not 0 <= day <= 6:
+        raise HTTPException(status_code=422, detail="day_of_week must be 0 (Mon) - 6 (Sun)")
+    if not body.get("start_time") or not body.get("end_time"):
+        raise HTTPException(status_code=422, detail="start_time and end_time required (HH:MM)")
+    set_working_hours(
+        email=user["email"],
+        day_of_week=day,
+        start_time=body["start_time"],
+        end_time=body["end_time"],
+        timezone=body.get("timezone", "UTC"),
+    )
+    return {"status": "ok"}
+
+
+@app.delete("/api/working-hours")
+@limiter.limit("30/minute")
+async def working_hours_delete(
+    request: Request,
+    day_of_week: int | None = None,
+    user: dict = Depends(require_user),
+):
+    delete_working_hours(user["email"], day_of_week)
+    return {"status": "ok"}
 
 
 # ── Health ───────────────────────────────────────────────────────────────

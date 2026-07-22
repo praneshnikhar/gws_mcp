@@ -118,11 +118,13 @@ def list_calendar_events(api_key: str, start: str, end: str,
 def create_calendar_event(api_key: str, summary: str, start: str, end: str,
                           timezone: str = "UTC", description: str = None,
                           location: str = None, attendees: list[str] = None,
+                          recurrence: list[str] = None,
                           calendar_id: str = "primary") -> dict:
     return _post(api_key, "/api/calendar/events", {
         "summary": summary, "start": start, "end": end,
         "timezone": timezone, "description": description,
         "location": location, "attendees": attendees or [],
+        "recurrence": recurrence or [],
         "calendar_id": calendar_id,
     })
 
@@ -131,12 +133,14 @@ def update_calendar_event(api_key: str, event_id: str,
                           summary: str = None, start: str = None, end: str = None,
                           timezone: str = None, description: str = None,
                           location: str = None, attendees: list[str] = None,
+                          recurrence: list[str] = None,
                           calendar_id: str = "primary") -> dict:
     return _patch(api_key, f"/api/calendar/events/{event_id}", {
         k: v for k, v in {
             "summary": summary, "start": start, "end": end,
             "timezone": timezone, "description": description,
             "location": location, "attendees": attendees,
+            "recurrence": recurrence,
             "calendar_id": calendar_id,
         }.items() if v is not None
     })
@@ -148,10 +152,43 @@ def delete_calendar_event(api_key: str, event_id: str,
                    {"calendar_id": calendar_id})
 
 
+def get_calendar_event(api_key: str, event_id: str,
+                       calendar_id: str = "primary") -> dict:
+    return _get(api_key, f"/api/calendar/events/{event_id}",
+                {"calendar_id": calendar_id})
+
+
 def get_availability(api_key: str, start: str, end: str,
                      duration_minutes: int = 30,
-                     calendar_id: str = "primary") -> dict:
+                     calendar_id: str = "primary",
+                     working_hours_only: bool = False) -> dict:
     return _get(api_key, "/api/calendar/availability", {
         "start": start, "end": end,
-        "duration_minutes": duration_minutes, "calendar_id": calendar_id,
+        "duration_minutes": duration_minutes,
+        "calendar_id": calendar_id,
+        "working_hours_only": str(working_hours_only).lower(),
     })
+
+
+# ── Working hours ────────────────────────────────────────────────────────
+
+def get_working_hours(api_key: str) -> dict:
+    return _get(api_key, "/api/working-hours")
+
+
+def set_working_hours(api_key: str, day_of_week: int,
+                      start_time: str, end_time: str,
+                      timezone: str = "UTC") -> dict:
+    return _post(api_key, "/api/working-hours", {
+        "day_of_week": day_of_week,
+        "start_time": start_time,
+        "end_time": end_time,
+        "timezone": timezone,
+    })
+
+
+def delete_working_hours(api_key: str, day_of_week: int = None) -> dict:
+    params = {}
+    if day_of_week is not None:
+        params["day_of_week"] = day_of_week
+    return _delete(api_key, "/api/working-hours", params=params)

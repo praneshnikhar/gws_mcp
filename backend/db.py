@@ -25,6 +25,15 @@ def init_db():
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_api_key ON users(api_key);
+
+        CREATE TABLE IF NOT EXISTS working_hours (
+            email TEXT NOT NULL,
+            day_of_week INTEGER NOT NULL,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            timezone TEXT NOT NULL DEFAULT 'UTC',
+            PRIMARY KEY (email, day_of_week)
+        );
     """)
     conn.commit()
     conn.close()
@@ -65,5 +74,41 @@ def update_user_token(email: str, google_token: str):
         "UPDATE users SET google_token = ? WHERE email = ?",
         (google_token, email),
     )
+    conn.commit()
+    conn.close()
+
+
+# ── Working hours ────────────────────────────────────────────────────────
+
+def set_working_hours(email: str, day_of_week: int, start_time: str, end_time: str, timezone: str = "UTC"):
+    conn = get_conn()
+    conn.execute(
+        """INSERT OR REPLACE INTO working_hours (email, day_of_week, start_time, end_time, timezone)
+           VALUES (?, ?, ?, ?, ?)""",
+        (email, day_of_week, start_time, end_time, timezone),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_working_hours(email: str) -> list[dict]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM working_hours WHERE email = ? ORDER BY day_of_week",
+        (email,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_working_hours(email: str, day_of_week: int | None = None):
+    conn = get_conn()
+    if day_of_week is not None:
+        conn.execute(
+            "DELETE FROM working_hours WHERE email = ? AND day_of_week = ?",
+            (email, day_of_week),
+        )
+    else:
+        conn.execute("DELETE FROM working_hours WHERE email = ?", (email,))
     conn.commit()
     conn.close()

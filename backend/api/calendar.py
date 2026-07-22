@@ -4,6 +4,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from backend.auth import refresh_google_token, SCOPES
+from backend.db import get_working_hours
 
 
 def _get_service(token_json: str, email: str | None = None):
@@ -35,6 +36,7 @@ def _format_event(event: dict) -> dict:
         "location": event.get("location"),
         "attendees": [a.get("email") for a in event.get("attendees", [])],
         "status": event.get("status", "confirmed"),
+        "recurrence": event.get("recurrence"),
         "recurring_event_id": event.get("recurringEventId"),
         "html_link": event.get("htmlLink"),
     }
@@ -70,6 +72,7 @@ def list_calendars(token_json: str, email: str | None = None) -> list[dict]:
 
 def list_events(token_json: str, start: str, end: str,
                 calendar_id: str = "primary", max_results: int = 50,
+                single_events: bool = True,
                 email: str | None = None) -> list[dict]:
     try:
         service = _get_service(token_json, email)
@@ -82,8 +85,8 @@ def list_events(token_json: str, start: str, end: str,
             timeMin=start,
             timeMax=end,
             maxResults=max_results,
-            singleEvents=True,
-            orderBy="startTime",
+            singleEvents=single_events,
+            orderBy="startTime" if single_events else None,
         ).execute()
     except HttpError as e:
         _handle_google_error(e, "listing calendar events")
@@ -91,11 +94,32 @@ def list_events(token_json: str, start: str, end: str,
     return [_format_event(event) for event in events.get("items", [])]
 
 
+# ── Get single event ─────────────────────────────────────────────────────
+
+def get_event(token_json: str, event_id: str,
+              calendar_id: str = "primary",
+              email: str | None = None) -> dict:
+    try:
+        service = _get_service(token_json, email)
+    except RuntimeError as e:
+        raise
+
+    try:
+        event = service.events().get(
+            calendarId=calendar_id, eventId=event_id
+        ).execute()
+    except HttpError as e:
+        _handle_google_error(e, f"fetching event {event_id}")
+
+    return _format_event(event)
+
+
 # ── Create event ─────────────────────────────────────────────────────────
 
 def create_event(token_json: str, summary: str, start: str, end: str,
                  timezone: str = "UTC", description: str | None = None,
                  location: str | None = None, attendees: list[str] | None = None,
+                 recurrence: list[str] | None = None,
                  calendar_id: str = "primary",
                  email: str | None = None) -> dict:
     try:
@@ -114,6 +138,8 @@ def create_event(token_json: str, summary: str, start: str, end: str,
         event_body["location"] = location
     if attendees:
         event_body["attendees"] = [{"email": a} for a in attendees]
+    if recurrence:
+        event_body["recurrence"] = recurrence
 
     try:
         created = service.events().insert(calendarId=calendar_id, body=event_body).execute()
@@ -132,6 +158,7 @@ def update_event(token_json: str, event_id: str,
                  description: str | None = None,
                  location: str | None = None,
                  attendees: list[str] | None = None,
+                 recurrence: list[str] | None = None,
                  calendar_id: str = "primary",
                  email: str | None = None) -> dict:
     try:
@@ -156,6 +183,8 @@ def update_event(token_json: str, event_id: str,
         existing["location"] = location
     if attendees is not None:
         existing["attendees"] = [{"email": a} for a in attendees]
+    if recurrence is not None:
+        existing["recurrence"] = recurrence
 
     try:
         updated = service.events().update(
@@ -185,9 +214,23 @@ def delete_event(token_json: str, event_id: str,
 
 # ── Availability ─────────────────────────────────────────────────────────
 
+def _is_within_working_hours(dt: datetime, working_hours: list[dict]) -> bool:
+    if not working_hours:
+        return True
+    weekday = dt.weekday()  # 0=Mon, 6=Sun
+    for wh in working_hours:
+        if wh["day_of_week"] == weekday:
+            wh_start = datetime.strptime(wh["start_time"], "%H:%M").time()
+            wh_end = datetime.strptime(wh["end_time"], "%H:%M").time()
+            if wh_start <= dt.time() <= wh_end:
+                return True
+    return False
+
+
 def get_availability(token_json: str, start: str, end: str,
                      duration_minutes: int = 30, timezone: str = "UTC",
                      calendar_id: str = "primary",
+                     working_hours_only: bool = False,
                      email: str | None = None) -> list[dict]:
     try:
         service = _get_service(token_json, email)
@@ -212,10 +255,17 @@ def get_availability(token_json: str, start: str, end: str,
     end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
     slot_duration = timedelta(minutes=duration_minutes)
 
+    wh = []
+    if working_hours_only and email:
+        wh = get_working_hours(email)
+
     slots = []
     current = start_dt
     while current + slot_duration <= end_dt:
         slot_end = current + slot_duration
+        if wh and not _is_within_working_hours(current, wh):
+            current += slot_duration
+            continue
         conflict = False
         for busy_slot in busy:
             busy_start = datetime.fromisoformat(busy_slot["start"].replace("Z", "+00:00"))

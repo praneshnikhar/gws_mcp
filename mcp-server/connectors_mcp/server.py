@@ -10,7 +10,8 @@ from .client import (
     list_emails, send_email, reply_email, forward_email,
     get_thread, mark_read, mark_unread, get_attachment,
     list_calendars, list_calendar_events, create_calendar_event,
-    update_calendar_event, delete_calendar_event, get_availability,
+    update_calendar_event, delete_calendar_event, get_calendar_event,
+    get_availability, get_working_hours, set_working_hours, delete_working_hours,
 )
 
 API_KEY = os.environ.get("CONNECTORS_API_KEY") or ""
@@ -165,8 +166,20 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_calendar_event",
+            description="Get a single calendar event by ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string", "description": "Event ID to retrieve"},
+                    "calendar_id": {"type": "string", "description": "Calendar ID (default: primary)", "default": "primary"},
+                },
+                "required": ["event_id"],
+            },
+        ),
+        Tool(
             name="create_calendar_event",
-            description="Create a new calendar event.",
+            description="Create a new calendar event. Add recurrence for repeating events.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -177,6 +190,7 @@ async def list_tools() -> list[Tool]:
                     "timezone": {"type": "string", "description": "Timezone (e.g. America/New_York)", "default": "UTC"},
                     "location": {"type": "string", "description": "Event location"},
                     "attendees": {"type": "array", "items": {"type": "string"}, "description": "Attendee email addresses"},
+                    "recurrence": {"type": "array", "items": {"type": "string"}, "description": "RRULE lines e.g. ['RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR']"},
                     "calendar_id": {"type": "string", "description": "Calendar ID (default: primary)", "default": "primary"},
                 },
                 "required": ["summary", "start", "end"],
@@ -196,6 +210,7 @@ async def list_tools() -> list[Tool]:
                     "timezone": {"type": "string", "description": "Timezone"},
                     "location": {"type": "string", "description": "New location"},
                     "attendees": {"type": "array", "items": {"type": "string"}, "description": "Attendee email addresses"},
+                    "recurrence": {"type": "array", "items": {"type": "string"}, "description": "RRULE lines to replace existing"},
                     "calendar_id": {"type": "string", "description": "Calendar ID", "default": "primary"},
                 },
                 "required": ["event_id"],
@@ -215,7 +230,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_availability",
-            description="Find free time slots in your calendar.",
+            description="Find free time slots in your calendar. Optionally restrict to working hours.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -223,8 +238,39 @@ async def list_tools() -> list[Tool]:
                     "end": {"type": "string", "description": "End of the range in ISO 8601"},
                     "duration_minutes": {"type": "integer", "description": "Desired meeting duration in minutes", "default": 30},
                     "calendar_id": {"type": "string", "description": "Calendar ID (default: primary)", "default": "primary"},
+                    "working_hours_only": {"type": "boolean", "description": "Only show slots within configured working hours", "default": False},
                 },
                 "required": ["start", "end"],
+            },
+        ),
+        # ── Working hours tools ──────────────────────────────────────
+        Tool(
+            name="get_working_hours",
+            description="Get your configured working hours.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="set_working_hours",
+            description="Set working hours for a specific day of the week.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "day_of_week": {"type": "integer", "description": "0=Monday, 1=Tuesday ... 6=Sunday"},
+                    "start_time": {"type": "string", "description": "Start time in HH:MM format e.g. 09:00"},
+                    "end_time": {"type": "string", "description": "End time in HH:MM format e.g. 17:00"},
+                    "timezone": {"type": "string", "description": "Timezone (e.g. America/New_York)", "default": "UTC"},
+                },
+                "required": ["day_of_week", "start_time", "end_time"],
+            },
+        ),
+        Tool(
+            name="delete_working_hours",
+            description="Delete working hours for a specific day or all days.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "day_of_week": {"type": "integer", "description": "0=Monday ... 6=Sunday (omit to clear all days)"},
+                },
             },
         ),
     ]
@@ -300,6 +346,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             result = list_calendars(API_KEY)
             text = _format_calendars(result["calendars"])
 
+        elif name == "get_calendar_event":
+            result = get_calendar_event(
+                API_KEY, arguments["event_id"],
+                calendar_id=arguments.get("calendar_id", "primary"),
+            )
+            text = _format_event_detail(result)
+
         elif name == "list_calendar_events":
             result = list_calendar_events(
                 API_KEY, arguments["start"], arguments["end"],
@@ -318,6 +371,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 description=arguments.get("description"),
                 location=arguments.get("location"),
                 attendees=arguments.get("attendees"),
+                recurrence=arguments.get("recurrence"),
                 calendar_id=arguments.get("calendar_id", "primary"),
             )
             text = f"Event created: {result['summary']}\nStart: {result['start']}\nEnd: {result['end']}\nLink: {result.get('html_link', 'N/A')}"
@@ -333,6 +387,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 description=arguments.get("description"),
                 location=arguments.get("location"),
                 attendees=arguments.get("attendees"),
+                recurrence=arguments.get("recurrence"),
                 calendar_id=arguments.get("calendar_id", "primary"),
             )
             text = f"Event updated: {result['summary']}\nStart: {result['start']}\nEnd: {result['end']}\nLink: {result.get('html_link', 'N/A')}"
@@ -351,8 +406,30 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 end=arguments["end"],
                 duration_minutes=arguments.get("duration_minutes", 30),
                 calendar_id=arguments.get("calendar_id", "primary"),
+                working_hours_only=arguments.get("working_hours_only", False),
             )
             text = _format_slots(result["slots"])
+
+        elif name == "get_working_hours":
+            result = get_working_hours(API_KEY)
+            text = _format_working_hours(result["working_hours"])
+
+        elif name == "set_working_hours":
+            set_working_hours(
+                API_KEY,
+                day_of_week=arguments["day_of_week"],
+                start_time=arguments["start_time"],
+                end_time=arguments["end_time"],
+                timezone=arguments.get("timezone", "UTC"),
+            )
+            text = f"Working hours set for day {arguments['day_of_week']}: {arguments['start_time']} - {arguments['end_time']}"
+
+        elif name == "delete_working_hours":
+            delete_working_hours(API_KEY, arguments.get("day_of_week"))
+            if "day_of_week" in arguments:
+                text = f"Working hours deleted for day {arguments['day_of_week']}."
+            else:
+                text = "All working hours deleted."
 
         else:
             raise ValueError(f"Unknown tool: {name}")
@@ -438,6 +515,37 @@ def _format_events(events: list[dict]) -> str:
         if e.get("recurring_event_id"):
             lines.append(f"   🔄 Recurring instance")
         lines.append("")
+    return "\n".join(lines)
+
+
+def _format_event_detail(event: dict) -> str:
+    lines = [
+        f"Summary: {event['summary']}",
+        f"Start: {event['start']}",
+        f"End: {event['end']}",
+    ]
+    if event.get("description"):
+        lines.append(f"Description: {event['description']}")
+    if event.get("location"):
+        lines.append(f"Location: {event['location']}")
+    if event.get("attendees"):
+        lines.append(f"Attendees: {', '.join(event['attendees'])}")
+    if event.get("recurrence"):
+        lines.append(f"Recurrence: {'; '.join(event['recurrence'])}")
+    if event.get("recurring_event_id"):
+        lines.append(f"🔄 Part of recurring series")
+    lines.append(f"Link: {event.get('html_link', 'N/A')}")
+    return "\n".join(lines)
+
+
+def _format_working_hours(hours: list[dict]) -> str:
+    if not hours:
+        return "No working hours configured."
+    DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    lines = ["Working hours:"]
+    for h in hours:
+        name = DAY_NAMES[h["day_of_week"]]
+        lines.append(f"  {name}: {h['start_time']} - {h['end_time']} ({h['timezone']})")
     return "\n".join(lines)
 
 
