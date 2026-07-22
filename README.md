@@ -1,17 +1,6 @@
 # gws_mcp
 
-**Your Google Workspace, controlled by AI.**
-
-gws_mcp connects your Gmail and Google Calendar to AI assistants like Claude, Cursor, or any MCP-compatible tool. Instead of switching tabs to check email or create events, you just ask — and the AI does it.
-
-**Examples of what you can say to the AI:**
-
-> *"What emails did I miss this morning?"*
-> *"Reply to Alice saying I'll be 10 minutes late."*
-> *"Find a free 30-minute slot tomorrow at 3 PM and schedule a meeting."*
-> *"Create a draft response to the thread about the budget review."*
-> *"What's on my calendar today?"*
-> *"Forward the latest email from Bob to the team."*
+Connect your Gmail and Google Calendar to AI assistants (Claude, Cursor, etc.) — read, send, and organize email + manage your calendar by talking to AI.
 
 ---
 
