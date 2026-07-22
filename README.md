@@ -45,4 +45,4 @@ Calendar: `list_calendars`, `list_calendar_events`, `get_calendar_event`, `creat
 ## Contributors
 
 <a href="https://github.com/praneshnikhar"><img src="https://github.com/praneshnikhar.png" width="48" height="48" alt="praneshnikhar"/></a>
-<a href="https://github.com/anthropics"><img src="https://github.com/anthropics.png" width="48" height="48" alt="Claude (Anthropic)"/></a>
+<a href="https://docs.anthropic.com/en/docs/claude-code/overview"><img src="https://github.com/anthropics.png" width="48" height="48" alt="Claude Code by Anthropic"/></a>
