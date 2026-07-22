@@ -44,5 +44,9 @@ Calendar: `list_calendars`, `list_calendar_events`, `get_calendar_event`, `creat
 
 ## Contributors
 
-<a href="https://github.com/praneshnikhar"><img src="https://github.com/praneshnikhar.png" width="48" height="48" alt="praneshnikhar"/></a>
-<a href="https://docs.anthropic.com/en/docs/claude-code/overview"><img src="https://github.com/anthropics.png" width="48" height="48" alt="Claude Code by Anthropic"/></a>
+<!-- markdownlint-disable -->
+| | |
+|:-|:-|
+| <img src="https://github.com/praneshnikhar.png" width="40" height="40" alt=""> | **praneshnikhar** — code & architecture |
+| <img src="https://github.com/anthropics.png" width="40" height="40" alt=""> | **Claude Code** (Anthropic) — AI pair programmer |
+<!-- markdownlint-enable -->
