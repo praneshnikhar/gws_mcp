@@ -1,0 +1,17 @@
+[project]
+name = "connectors-mcp"
+version = "0.1.0"
+description = "MCP server for connectors.ai — bring your email, calendar, and more to Claude, Cursor, and any MCP client."
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.27.0",
+    "anyio>=4.0.0",
+]
+
+[project.scripts]
+connectors-mcp = "connectors_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
