@@ -1,6 +1,6 @@
 # gws_mcp
 
-Connect your Gmail and Google Calendar to AI assistants (Claude, Cursor, etc.) — read, send, and organize email + manage your calendar by talking to AI.
+Gmail + Google Calendar, controlled by AI.
 
 ---
 
