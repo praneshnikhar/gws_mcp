@@ -1,0 +1,15 @@
+* text=auto
+
+*.py text diff=python
+*.md text
+*.yml text
+*.yaml text
+*.json text
+*.env text
+*.sh text
+Dockerfile text
+*.sql text
+
+*.png binary
+*.jpg binary
+*.ico binary
