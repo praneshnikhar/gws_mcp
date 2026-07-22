@@ -22,4 +22,4 @@ jobs:
           python-version: "3.11"
       - run: pip install -r backend/requirements.txt
       - run: pip install pytest pytest-asyncio
-      - run: python -m pytest tests/ -v
+      - run: PYTHONPATH=. python -m pytest tests/ -v
