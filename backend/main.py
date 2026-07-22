@@ -4,7 +4,6 @@ connectors.ai backend
 Start:  uvicorn backend.main:app --reload --port 8321
 """
 
-import os
 import secrets
 import logging
 import time

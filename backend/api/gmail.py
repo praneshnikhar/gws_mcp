@@ -5,10 +5,7 @@ import uuid
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
-from email.mime.audio import MIMEAudio
-from email.mime.image import MIMEImage
-from email.mime.application import MIMEApplication
-from email.utils import formatdate, parsedate_to_datetime
+from email.utils import formatdate
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -30,7 +27,7 @@ def _handle_google_error(e: HttpError, action: str):
     if e.resp.status == 404:
         raise RuntimeError(f"Resource not found while trying to {action}.")
     if e.resp.status == 429:
-        raise RuntimeError(f"Google API rate limit exceeded. Try again later.")
+        raise RuntimeError("Google API rate limit exceeded. Try again later.")
     raise RuntimeError(f"Google API error while {action}: {e.resp.status} {e.reason}")
 
 
@@ -83,7 +80,7 @@ def list_messages(token_json: str, max_results: int = 20, query: str = "",
                   email: str | None = None) -> tuple[list[dict], str | None]:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     params = {"userId": "me", "maxResults": max_results}
@@ -181,7 +178,7 @@ def send_message(token_json: str, to: list[str], subject: str, body: str,
                  email: str | None = None) -> dict:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     raw_bytes = _build_mime(to, subject, body, cc, bcc, attachments=attachments)
@@ -209,7 +206,7 @@ def reply_message(token_json: str, thread_id: str, message_id: str,
                   email: str | None = None) -> dict:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     headers = _get_original_headers(service, message_id)
@@ -224,7 +221,6 @@ def reply_message(token_json: str, thread_id: str, message_id: str,
     references = f"{orig_refs} {orig_msg_id}".strip()
 
     orig_to = headers.get("From", "")  # reply to original sender
-    orig_cc = headers.get("Cc", "")
 
     raw_bytes = _build_mime(
         to=[orig_to],
@@ -250,7 +246,7 @@ def forward_message(token_json: str, thread_id: str, message_id: str,
                     email: str | None = None) -> dict:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     headers = _get_original_headers(service, message_id)
@@ -294,7 +290,7 @@ def get_thread(token_json: str, thread_id: str,
                email: str | None = None) -> list[dict]:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     try:
@@ -329,7 +325,7 @@ def modify_message_labels(token_json: str, message_id: str,
                           email: str | None = None) -> dict:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     body = {}
@@ -361,7 +357,7 @@ def get_attachment(token_json: str, message_id: str, attachment_id: str,
                    email: str | None = None) -> dict:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     try:

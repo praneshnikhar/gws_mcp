@@ -465,7 +465,7 @@ def _format_email_list(data: dict) -> str:
         lines.append(f"   From: {m['from_']}  |  Date: {m['date']}")
         labels = m.get("labels", [])
         if "UNREAD" in labels:
-            lines.append(f"   📩 UNREAD")
+            lines.append("   📩 UNREAD")
         lines.append(f"   {m['snippet'][:100]}")
         lines.append("")
     if data.get("next_page_token"):
@@ -513,7 +513,7 @@ def _format_events(events: list[dict]) -> str:
         if e.get("attendees"):
             lines.append(f"   Attendees: {', '.join(e['attendees'])}")
         if e.get("recurring_event_id"):
-            lines.append(f"   🔄 Recurring instance")
+            lines.append("   🔄 Recurring instance")
         lines.append("")
     return "\n".join(lines)
 
@@ -533,7 +533,7 @@ def _format_event_detail(event: dict) -> str:
     if event.get("recurrence"):
         lines.append(f"Recurrence: {'; '.join(event['recurrence'])}")
     if event.get("recurring_event_id"):
-        lines.append(f"🔄 Part of recurring series")
+        lines.append("🔄 Part of recurring series")
     lines.append(f"Link: {event.get('html_link', 'N/A')}")
     return "\n".join(lines)
 

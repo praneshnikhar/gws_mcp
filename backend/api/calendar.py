@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -22,7 +22,7 @@ def _handle_google_error(e: HttpError, action: str):
     if e.resp.status == 404:
         raise RuntimeError(f"Resource not found while trying to {action}.")
     if e.resp.status == 429:
-        raise RuntimeError(f"Google API rate limit exceeded. Try again later.")
+        raise RuntimeError("Google API rate limit exceeded. Try again later.")
     raise RuntimeError(f"Google API error while {action}: {e.resp.status} {e.reason}")
 
 
@@ -47,7 +47,7 @@ def _format_event(event: dict) -> dict:
 def list_calendars(token_json: str, email: str | None = None) -> list[dict]:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     try:
@@ -76,7 +76,7 @@ def list_events(token_json: str, start: str, end: str,
                 email: str | None = None) -> list[dict]:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     try:
@@ -101,7 +101,7 @@ def get_event(token_json: str, event_id: str,
               email: str | None = None) -> dict:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     try:
@@ -124,7 +124,7 @@ def create_event(token_json: str, summary: str, start: str, end: str,
                  email: str | None = None) -> dict:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     event_body = {
@@ -163,7 +163,7 @@ def update_event(token_json: str, event_id: str,
                  email: str | None = None) -> dict:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     try:
@@ -203,7 +203,7 @@ def delete_event(token_json: str, event_id: str,
                  email: str | None = None) -> None:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     try:
@@ -234,7 +234,7 @@ def get_availability(token_json: str, start: str, end: str,
                      email: str | None = None) -> list[dict]:
     try:
         service = _get_service(token_json, email)
-    except RuntimeError as e:
+    except RuntimeError:
         raise
 
     body = {

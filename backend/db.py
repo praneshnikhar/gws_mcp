@@ -1,6 +1,5 @@
 import sqlite3
 import os
-from datetime import datetime, timezone
 from typing import Optional
 
 DB_PATH = os.path.expanduser("~/.connectors/auth.db")
