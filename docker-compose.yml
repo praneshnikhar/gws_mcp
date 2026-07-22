@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  backend:
+    build: .
+    ports:
+      - "8321:8321"
+    env_file: .env
+    volumes:
+      - connectors_data:/root/.connectors
+
+volumes:
+  connectors_data:

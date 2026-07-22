@@ -42,11 +42,3 @@ Email: `list_emails`, `send_email`, `reply_email`, `forward_email`, `get_thread`
 
 Calendar: `list_calendars`, `list_calendar_events`, `get_calendar_event`, `create_calendar_event`, `update_calendar_event`, `delete_calendar_event`, `get_availability`, `get_working_hours`, `set_working_hours`, `delete_working_hours`
 
-## Contributors
-
-<!-- markdownlint-disable -->
-| | |
-|:-|:-|
-| <img src="https://github.com/praneshnikhar.png" width="40" height="40" alt=""> | **praneshnikhar** — code & architecture |
-| <img src="https://avatars.githubusercontent.com/u/81847?v=4" width="40" height="40" alt=""> | **Claude Code** ([@claude](https://github.com/claude)) — AI pair programmer |
-<!-- markdownlint-enable -->
