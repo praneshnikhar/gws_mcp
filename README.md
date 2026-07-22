@@ -48,5 +48,5 @@ Calendar: `list_calendars`, `list_calendar_events`, `get_calendar_event`, `creat
 | | |
 |:-|:-|
 | <img src="https://github.com/praneshnikhar.png" width="40" height="40" alt=""> | **praneshnikhar** — code & architecture |
-| <img src="https://github.com/claude.png" width="40" height="40" alt=""> | **Claude Code** — AI pair programmer |
+| <img src="https://avatars.githubusercontent.com/u/81847?v=4" width="40" height="40" alt=""> | **Claude Code** ([@claude](https://github.com/claude)) — AI pair programmer |
 <!-- markdownlint-enable -->
