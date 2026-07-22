@@ -1,6 +1,6 @@
 # gws_mcp
 
-Gmail + Google Calendar, controlled by AI.
+MCP server for Google Workspace (Gmail + Calendar).
 
 ---
 
