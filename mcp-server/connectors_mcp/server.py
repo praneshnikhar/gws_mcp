@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-connectors.ai MCP Server
-
-Run:  CONNECTORS_API_KEY=cnx_xxx python -m connectors_mcp.server
-"""
 
 import os
 import sys
@@ -12,8 +7,10 @@ from mcp.types import Tool, TextContent, Resource
 from typing import Any
 
 from .client import (
-    list_emails, send_email, get_thread,
-    list_calendar_events, create_calendar_event, get_availability,
+    list_emails, send_email, reply_email, forward_email,
+    get_thread, mark_read, mark_unread, get_attachment,
+    list_calendars, list_calendar_events, create_calendar_event,
+    update_calendar_event, delete_calendar_event, get_availability,
 )
 
 API_KEY = os.environ.get("CONNECTORS_API_KEY") or ""
@@ -30,26 +27,28 @@ if not API_KEY:
     print("ERROR: Set CONNECTORS_API_KEY env var or add it to ~/.connectors/config", file=sys.stderr)
     sys.exit(1)
 
-server = Server("connectors-ai")
+server = Server("gws-mcp")
 
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     return [
+        # ── Email tools ──────────────────────────────────────────────
         Tool(
             name="list_emails",
-            description="List email messages from your inbox. Optionally filter with a search query.",
+            description="List email messages from your inbox. Supports Gmail search syntax: from:, to:, subject:, before:, after:, has:attachment, is:read, is:unread, in:inbox, in:spam, etc.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "max_results": {"type": "integer", "description": "Max emails to return (1-100)", "default": 20},
-                    "query": {"type": "string", "description": "Gmail search query (e.g. 'from:alice', 'subject:meeting')", "default": ""},
+                    "query": {"type": "string", "description": "Gmail search query e.g. 'from:alice@.com subject:meeting has:attachment'", "default": ""},
+                    "page_token": {"type": "string", "description": "Token for pagination (from previous response)", "default": None},
                 },
             },
         ),
         Tool(
             name="send_email",
-            description="Send an email from your connected account.",
+            description="Send an email. Optionally include base64-encoded attachments.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -58,29 +57,109 @@ async def list_tools() -> list[Tool]:
                     "body": {"type": "string", "description": "Email body text"},
                     "cc": {"type": "array", "items": {"type": "string"}, "description": "CC recipients"},
                     "bcc": {"type": "array", "items": {"type": "string"}, "description": "BCC recipients"},
+                    "attachments": {"type": "array", "items": {"type": "object", "properties": {
+                        "filename": {"type": "string", "description": "Filename"},
+                        "content": {"type": "string", "description": "Base64-encoded file content"},
+                        "mime_type": {"type": "string", "description": "MIME type", "default": "application/octet-stream"},
+                    }}},
                 },
                 "required": ["to", "subject", "body"],
             },
         ),
         Tool(
+            name="reply_email",
+            description="Reply to an existing email in the same thread.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "thread_id": {"type": "string", "description": "Thread ID of the email to reply to"},
+                    "message_id": {"type": "string", "description": "Message ID of the specific email to reply to"},
+                    "body": {"type": "string", "description": "Reply body text"},
+                    "cc": {"type": "array", "items": {"type": "string"}, "description": "CC recipients"},
+                },
+                "required": ["thread_id", "message_id", "body"],
+            },
+        ),
+        Tool(
+            name="forward_email",
+            description="Forward an email to new recipients.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "thread_id": {"type": "string", "description": "Thread ID of the email to forward"},
+                    "message_id": {"type": "string", "description": "Message ID of the specific email to forward"},
+                    "to": {"type": "array", "items": {"type": "string"}, "description": "New recipient email addresses"},
+                    "body": {"type": "string", "description": "Additional body text to include above the forwarded message"},
+                    "cc": {"type": "array", "items": {"type": "string"}, "description": "CC recipients"},
+                },
+                "required": ["thread_id", "message_id", "to", "body"],
+            },
+        ),
+        Tool(
             name="get_thread",
-            description="Get all messages in an email thread by thread ID.",
+            description="Get all messages in an email thread. Optionally include attachment metadata.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "thread_id": {"type": "string", "description": "The thread ID to retrieve"},
+                    "include_attachments": {"type": "boolean", "description": "Include attachment info in response", "default": False},
                 },
                 "required": ["thread_id"],
             },
         ),
         Tool(
-            name="list_calendar_events",
-            description="List calendar events in a date range.",
+            name="mark_read",
+            description="Mark an email as read.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "start": {"type": "string", "description": "Start time in ISO 8601 format (e.g. 2026-07-22T00:00:00Z)"},
-                    "end": {"type": "string", "description": "End time in ISO 8601 format (e.g. 2026-07-23T00:00:00Z)"},
+                    "message_id": {"type": "string", "description": "Message ID to mark as read"},
+                },
+                "required": ["message_id"],
+            },
+        ),
+        Tool(
+            name="mark_unread",
+            description="Mark an email as unread.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string", "description": "Message ID to mark as unread"},
+                },
+                "required": ["message_id"],
+            },
+        ),
+        Tool(
+            name="get_attachment",
+            description="Download an attachment by message ID and attachment ID. Returns base64-encoded data.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string", "description": "Message ID containing the attachment"},
+                    "attachment_id": {"type": "string", "description": "Attachment ID from thread response"},
+                },
+                "required": ["message_id", "attachment_id"],
+            },
+        ),
+        # ── Calendar tools ───────────────────────────────────────────
+        Tool(
+            name="list_calendars",
+            description="List all available calendars.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="list_calendar_events",
+            description="List calendar events in a date range from a specific calendar (defaults to primary).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "start": {"type": "string", "description": "Start time in ISO 8601 (e.g. 2026-07-22T00:00:00Z)"},
+                    "end": {"type": "string", "description": "End time in ISO 8601 (e.g. 2026-07-23T00:00:00Z)"},
+                    "calendar_id": {"type": "string", "description": "Calendar ID (default: primary)", "default": "primary"},
+                    "max_results": {"type": "integer", "description": "Max events to return", "default": 50},
                 },
                 "required": ["start", "end"],
             },
@@ -92,14 +171,46 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "summary": {"type": "string", "description": "Event title"},
-                    "start": {"type": "string", "description": "Start time in ISO 8601 format"},
-                    "end": {"type": "string", "description": "End time in ISO 8601 format"},
+                    "start": {"type": "string", "description": "Start time in ISO 8601"},
+                    "end": {"type": "string", "description": "End time in ISO 8601"},
                     "description": {"type": "string", "description": "Event description"},
                     "timezone": {"type": "string", "description": "Timezone (e.g. America/New_York)", "default": "UTC"},
                     "location": {"type": "string", "description": "Event location"},
                     "attendees": {"type": "array", "items": {"type": "string"}, "description": "Attendee email addresses"},
+                    "calendar_id": {"type": "string", "description": "Calendar ID (default: primary)", "default": "primary"},
                 },
                 "required": ["summary", "start", "end"],
+            },
+        ),
+        Tool(
+            name="update_calendar_event",
+            description="Update an existing calendar event. Only provided fields will be updated.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string", "description": "Event ID to update"},
+                    "summary": {"type": "string", "description": "New title"},
+                    "start": {"type": "string", "description": "New start time in ISO 8601"},
+                    "end": {"type": "string", "description": "New end time in ISO 8601"},
+                    "description": {"type": "string", "description": "New description"},
+                    "timezone": {"type": "string", "description": "Timezone"},
+                    "location": {"type": "string", "description": "New location"},
+                    "attendees": {"type": "array", "items": {"type": "string"}, "description": "Attendee email addresses"},
+                    "calendar_id": {"type": "string", "description": "Calendar ID", "default": "primary"},
+                },
+                "required": ["event_id"],
+            },
+        ),
+        Tool(
+            name="delete_calendar_event",
+            description="Delete a calendar event.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "event_id": {"type": "string", "description": "Event ID to delete"},
+                    "calendar_id": {"type": "string", "description": "Calendar ID (default: primary)", "default": "primary"},
+                },
+                "required": ["event_id"],
             },
         ),
         Tool(
@@ -111,6 +222,7 @@ async def list_tools() -> list[Tool]:
                     "start": {"type": "string", "description": "Start of the range in ISO 8601"},
                     "end": {"type": "string", "description": "End of the range in ISO 8601"},
                     "duration_minutes": {"type": "integer", "description": "Desired meeting duration in minutes", "default": 30},
+                    "calendar_id": {"type": "string", "description": "Calendar ID (default: primary)", "default": "primary"},
                 },
                 "required": ["start", "end"],
             },
@@ -121,13 +233,15 @@ async def list_tools() -> list[Tool]:
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
+        # ── Email ────────────────────────────────────────────────────
         if name == "list_emails":
             result = list_emails(
                 API_KEY,
                 max_results=arguments.get("max_results", 20),
                 query=arguments.get("query", ""),
+                page_token=arguments.get("page_token"),
             )
-            text = _format_emails(result)
+            text = _format_email_list(result)
 
         elif name == "send_email":
             result = send_email(
@@ -137,16 +251,62 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 body=arguments["body"],
                 cc=arguments.get("cc"),
                 bcc=arguments.get("bcc"),
+                attachments=arguments.get("attachments"),
             )
             text = f"Email sent. ID: {result['id']}, Thread: {result['thread_id']}"
 
+        elif name == "reply_email":
+            result = reply_email(
+                API_KEY,
+                thread_id=arguments["thread_id"],
+                message_id=arguments["message_id"],
+                body=arguments["body"],
+                cc=arguments.get("cc"),
+            )
+            text = f"Reply sent. ID: {result['id']}, Thread: {result['thread_id']}"
+
+        elif name == "forward_email":
+            result = forward_email(
+                API_KEY,
+                thread_id=arguments["thread_id"],
+                message_id=arguments["message_id"],
+                to=arguments["to"],
+                body=arguments["body"],
+                cc=arguments.get("cc"),
+            )
+            text = f"Email forwarded. ID: {result['id']}, Thread: {result['thread_id']}"
+
         elif name == "get_thread":
-            result = get_thread(API_KEY, arguments["thread_id"])
-            text = _format_thread(result)
+            result = get_thread(
+                API_KEY, arguments["thread_id"],
+                include_attachments=arguments.get("include_attachments", False),
+            )
+            text = _format_thread(result["messages"])
+
+        elif name == "mark_read":
+            result = mark_read(API_KEY, arguments["message_id"])
+            text = f"Marked as read. Labels: {', '.join(result['labels'])}"
+
+        elif name == "mark_unread":
+            result = mark_unread(API_KEY, arguments["message_id"])
+            text = f"Marked as unread. Labels: {', '.join(result['labels'])}"
+
+        elif name == "get_attachment":
+            result = get_attachment(API_KEY, arguments["message_id"], arguments["attachment_id"])
+            text = f"Attachment size: {result['size']} bytes\nData (base64, first 200 chars): {result['data'][:200]}..."
+
+        # ── Calendar ─────────────────────────────────────────────────
+        elif name == "list_calendars":
+            result = list_calendars(API_KEY)
+            text = _format_calendars(result["calendars"])
 
         elif name == "list_calendar_events":
-            result = list_calendar_events(API_KEY, arguments["start"], arguments["end"])
-            text = _format_events(result)
+            result = list_calendar_events(
+                API_KEY, arguments["start"], arguments["end"],
+                calendar_id=arguments.get("calendar_id", "primary"),
+                max_results=arguments.get("max_results", 50),
+            )
+            text = _format_events(result["events"])
 
         elif name == "create_calendar_event":
             result = create_calendar_event(
@@ -158,8 +318,31 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 description=arguments.get("description"),
                 location=arguments.get("location"),
                 attendees=arguments.get("attendees"),
+                calendar_id=arguments.get("calendar_id", "primary"),
             )
             text = f"Event created: {result['summary']}\nStart: {result['start']}\nEnd: {result['end']}\nLink: {result.get('html_link', 'N/A')}"
+
+        elif name == "update_calendar_event":
+            result = update_calendar_event(
+                API_KEY,
+                event_id=arguments["event_id"],
+                summary=arguments.get("summary"),
+                start=arguments.get("start"),
+                end=arguments.get("end"),
+                timezone=arguments.get("timezone"),
+                description=arguments.get("description"),
+                location=arguments.get("location"),
+                attendees=arguments.get("attendees"),
+                calendar_id=arguments.get("calendar_id", "primary"),
+            )
+            text = f"Event updated: {result['summary']}\nStart: {result['start']}\nEnd: {result['end']}\nLink: {result.get('html_link', 'N/A')}"
+
+        elif name == "delete_calendar_event":
+            delete_calendar_event(
+                API_KEY, arguments["event_id"],
+                calendar_id=arguments.get("calendar_id", "primary"),
+            )
+            text = f"Event {arguments['event_id']} deleted."
 
         elif name == "get_availability":
             result = get_availability(
@@ -167,8 +350,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 start=arguments["start"],
                 end=arguments["end"],
                 duration_minutes=arguments.get("duration_minutes", 30),
+                calendar_id=arguments.get("calendar_id", "primary"),
             )
-            text = _format_slots(result)
+            text = _format_slots(result["slots"])
 
         else:
             raise ValueError(f"Unknown tool: {name}")
@@ -181,26 +365,34 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 @server.list_resources()
 async def list_resources() -> list[Resource]:
     return [
-        Resource(uri="connectors://info", name="Account Info", mimeType="text/plain"),
+        Resource(uri="gws://info", name="Account Info", mimeType="text/plain"),
     ]
 
 
 @server.read_resource()
 async def read_resource(uri: str) -> str:
-    if uri == "connectors://info":
-        return "connectors.ai — bring your email, calendar, and more to any AI tool."
+    if uri == "gws://info":
+        return "gws_mcp — bring your Google Workspace (email, calendar) to any AI tool."
     raise ValueError(f"Unknown resource: {uri}")
 
 
-def _format_emails(emails: list[dict]) -> str:
+# ── Formatters ───────────────────────────────────────────────────────────
+
+def _format_email_list(data: dict) -> str:
+    emails = data.get("messages", [])
     if not emails:
         return "No emails found."
     lines = []
     for i, m in enumerate(emails, 1):
         lines.append(f"{i}. [{m['id']}] {m['subject']}")
         lines.append(f"   From: {m['from_']}  |  Date: {m['date']}")
+        labels = m.get("labels", [])
+        if "UNREAD" in labels:
+            lines.append(f"   📩 UNREAD")
         lines.append(f"   {m['snippet'][:100]}")
         lines.append("")
+    if data.get("next_page_token"):
+        lines.append(f"--- More results. Use page_token={data['next_page_token']} to fetch next page ---")
     return "\n".join(lines)
 
 
@@ -211,8 +403,23 @@ def _format_thread(messages: list[dict]) -> str:
         lines.append(f"From: {m['from_']}  |  Date: {m['date']}")
         lines.append(f"Subject: {m['subject']}")
         lines.append(m['body'][:500] if m['body'] else m['snippet'])
+        if m.get("attachments"):
+            for att in m["attachments"]:
+                lines.append(f"  📎 {att['filename']} ({att['mime_type']}, {att['size']} bytes) — attachment_id: {att['attachment_id']}")
         lines.append("")
     return "\n".join(lines) or "No messages found."
+
+
+def _format_calendars(calendars: list[dict]) -> str:
+    if not calendars:
+        return "No calendars found."
+    lines = []
+    for i, c in enumerate(calendars, 1):
+        primary = " (primary)" if c.get("primary") else ""
+        lines.append(f"{i}. {c['summary']}{primary}")
+        lines.append(f"   ID: {c['id']}  |  Role: {c['access_role']}  |  TZ: {c['timezone']}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def _format_events(events: list[dict]) -> str:
@@ -220,12 +427,16 @@ def _format_events(events: list[dict]) -> str:
         return "No events found in this range."
     lines = []
     for i, e in enumerate(events, 1):
+        if e.get("status") == "cancelled":
+            continue
         lines.append(f"{i}. {e['summary']}")
         lines.append(f"   {e['start']} → {e['end']}")
         if e.get("location"):
             lines.append(f"   Location: {e['location']}")
         if e.get("attendees"):
             lines.append(f"   Attendees: {', '.join(e['attendees'])}")
+        if e.get("recurring_event_id"):
+            lines.append(f"   🔄 Recurring instance")
         lines.append("")
     return "\n".join(lines)
 

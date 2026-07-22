@@ -25,7 +25,51 @@ def _handle_google_error(e: HttpError, action: str):
     raise RuntimeError(f"Google API error while {action}: {e.resp.status} {e.reason}")
 
 
-def list_events(token_json: str, start: str, end: str, max_results: int = 50,
+def _format_event(event: dict) -> dict:
+    return {
+        "id": event["id"],
+        "summary": event.get("summary", "(no title)"),
+        "description": event.get("description"),
+        "start": event["start"].get("dateTime", event["start"].get("date")),
+        "end": event["end"].get("dateTime", event["end"].get("date")),
+        "location": event.get("location"),
+        "attendees": [a.get("email") for a in event.get("attendees", [])],
+        "status": event.get("status", "confirmed"),
+        "recurring_event_id": event.get("recurringEventId"),
+        "html_link": event.get("htmlLink"),
+    }
+
+
+# ── Multi-calendar ───────────────────────────────────────────────────────
+
+def list_calendars(token_json: str, email: str | None = None) -> list[dict]:
+    try:
+        service = _get_service(token_json, email)
+    except RuntimeError as e:
+        raise
+
+    try:
+        result = service.calendarList().list().execute()
+    except HttpError as e:
+        _handle_google_error(e, "listing calendars")
+
+    calendars = []
+    for cal in result.get("items", []):
+        calendars.append({
+            "id": cal["id"],
+            "summary": cal.get("summary", ""),
+            "description": cal.get("description"),
+            "primary": cal.get("primary", False),
+            "access_role": cal.get("accessRole", "reader"),
+            "timezone": cal.get("timeZone", "UTC"),
+        })
+    return calendars
+
+
+# ── List events ──────────────────────────────────────────────────────────
+
+def list_events(token_json: str, start: str, end: str,
+                calendar_id: str = "primary", max_results: int = 50,
                 email: str | None = None) -> list[dict]:
     try:
         service = _get_service(token_json, email)
@@ -34,7 +78,7 @@ def list_events(token_json: str, start: str, end: str, max_results: int = 50,
 
     try:
         events = service.events().list(
-            calendarId="primary",
+            calendarId=calendar_id,
             timeMin=start,
             timeMax=end,
             maxResults=max_results,
@@ -44,25 +88,15 @@ def list_events(token_json: str, start: str, end: str, max_results: int = 50,
     except HttpError as e:
         _handle_google_error(e, "listing calendar events")
 
-    result = []
-    for event in events.get("items", []):
-        result.append({
-            "id": event["id"],
-            "summary": event.get("summary", "(no title)"),
-            "description": event.get("description"),
-            "start": event["start"].get("dateTime", event["start"].get("date")),
-            "end": event["end"].get("dateTime", event["end"].get("date")),
-            "location": event.get("location"),
-            "attendees": [a.get("email") for a in event.get("attendees", [])],
-        })
+    return [_format_event(event) for event in events.get("items", [])]
 
-    return result
 
+# ── Create event ─────────────────────────────────────────────────────────
 
 def create_event(token_json: str, summary: str, start: str, end: str,
                  timezone: str = "UTC", description: str | None = None,
                  location: str | None = None, attendees: list[str] | None = None,
-                 reminders_minutes: list[int] | None = None,
+                 calendar_id: str = "primary",
                  email: str | None = None) -> dict:
     try:
         service = _get_service(token_json, email)
@@ -80,28 +114,80 @@ def create_event(token_json: str, summary: str, start: str, end: str,
         event_body["location"] = location
     if attendees:
         event_body["attendees"] = [{"email": a} for a in attendees]
-    if reminders_minutes:
-        event_body["reminders"] = {
-            "useDefault": False,
-            "overrides": [{"method": "popup", "minutes": m} for m in reminders_minutes],
-        }
 
     try:
-        created = service.events().insert(calendarId="primary", body=event_body).execute()
+        created = service.events().insert(calendarId=calendar_id, body=event_body).execute()
     except HttpError as e:
         _handle_google_error(e, "creating calendar event")
 
-    return {
-        "id": created["id"],
-        "summary": created.get("summary"),
-        "start": created["start"].get("dateTime", created["start"].get("date")),
-        "end": created["end"].get("dateTime", created["end"].get("date")),
-        "html_link": created.get("htmlLink"),
-    }
+    return _format_event(created)
 
+
+# ── Update event ─────────────────────────────────────────────────────────
+
+def update_event(token_json: str, event_id: str,
+                 summary: str | None = None,
+                 start: str | None = None, end: str | None = None,
+                 timezone: str | None = None,
+                 description: str | None = None,
+                 location: str | None = None,
+                 attendees: list[str] | None = None,
+                 calendar_id: str = "primary",
+                 email: str | None = None) -> dict:
+    try:
+        service = _get_service(token_json, email)
+    except RuntimeError as e:
+        raise
+
+    try:
+        existing = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+    except HttpError as e:
+        _handle_google_error(e, f"fetching event {event_id}")
+
+    if summary is not None:
+        existing["summary"] = summary
+    if start is not None:
+        existing["start"] = {"dateTime": start, "timeZone": timezone or existing["start"].get("timeZone", "UTC")}
+    if end is not None:
+        existing["end"] = {"dateTime": end, "timeZone": timezone or existing["end"].get("timeZone", "UTC")}
+    if description is not None:
+        existing["description"] = description
+    if location is not None:
+        existing["location"] = location
+    if attendees is not None:
+        existing["attendees"] = [{"email": a} for a in attendees]
+
+    try:
+        updated = service.events().update(
+            calendarId=calendar_id, eventId=event_id, body=existing
+        ).execute()
+    except HttpError as e:
+        _handle_google_error(e, f"updating event {event_id}")
+
+    return _format_event(updated)
+
+
+# ── Delete event ─────────────────────────────────────────────────────────
+
+def delete_event(token_json: str, event_id: str,
+                 calendar_id: str = "primary",
+                 email: str | None = None) -> None:
+    try:
+        service = _get_service(token_json, email)
+    except RuntimeError as e:
+        raise
+
+    try:
+        service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+    except HttpError as e:
+        _handle_google_error(e, f"deleting event {event_id}")
+
+
+# ── Availability ─────────────────────────────────────────────────────────
 
 def get_availability(token_json: str, start: str, end: str,
                      duration_minutes: int = 30, timezone: str = "UTC",
+                     calendar_id: str = "primary",
                      email: str | None = None) -> list[dict]:
     try:
         service = _get_service(token_json, email)
@@ -112,7 +198,7 @@ def get_availability(token_json: str, start: str, end: str,
         "timeMin": start,
         "timeMax": end,
         "timeZone": timezone,
-        "items": [{"id": "primary"}],
+        "items": [{"id": calendar_id}],
     }
 
     try:
@@ -120,7 +206,7 @@ def get_availability(token_json: str, start: str, end: str,
     except HttpError as e:
         _handle_google_error(e, "checking availability")
 
-    busy = result["calendars"].get("primary", {}).get("busy", [])
+    busy = result["calendars"].get(calendar_id, {}).get("busy", [])
 
     start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
     end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))

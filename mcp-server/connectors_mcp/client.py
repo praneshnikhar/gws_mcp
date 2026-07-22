@@ -20,46 +20,138 @@ def _get(api_key: str, path: str, params: dict = None) -> dict:
 
 def _post(api_key: str, path: str, body: dict, params: dict = None) -> dict:
     url = f"{BASE_URL}{path}"
+    if params is None:
+        params = {}
     resp = httpx.post(url, json=body, params=params, headers=_headers(api_key), timeout=30)
     resp.raise_for_status()
     return resp.json()
 
 
-def list_emails(api_key: str, max_results: int = 20, query: str = "") -> list[dict]:
-    data = _get(api_key, "/api/email/list", {"max_results": max_results, "query": query})
-    return data["messages"]
+def _patch(api_key: str, path: str, body: dict, params: dict = None) -> dict:
+    url = f"{BASE_URL}{path}"
+    if params is None:
+        params = {}
+    resp = httpx.request("PATCH", url, json=body, params=params, headers=_headers(api_key), timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _delete(api_key: str, path: str, params: dict = None) -> dict:
+    url = f"{BASE_URL}{path}"
+    if params is None:
+        params = {}
+    resp = httpx.request("DELETE", url, params=params, headers=_headers(api_key), timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+# ── Email ────────────────────────────────────────────────────────────────
+
+def list_emails(api_key: str, max_results: int = 20, query: str = "",
+                page_token: str | None = None) -> dict:
+    params = {"max_results": max_results, "query": query}
+    if page_token:
+        params["page_token"] = page_token
+    return _get(api_key, "/api/email/list", params)
 
 
 def send_email(api_key: str, to: list[str], subject: str, body: str,
-               cc: list[str] = None, bcc: list[str] = None) -> dict:
+               cc: list[str] = None, bcc: list[str] = None,
+               attachments: list[dict] = None) -> dict:
     return _post(api_key, "/api/email/send", {
         "to": to, "subject": subject, "body": body,
         "cc": cc or [], "bcc": bcc or [],
+        "attachments": attachments or [],
     })
 
 
-def get_thread(api_key: str, thread_id: str) -> list[dict]:
-    data = _get(api_key, f"/api/email/thread/{thread_id}")
-    return data["messages"]
+def reply_email(api_key: str, thread_id: str, message_id: str, body: str,
+                cc: list[str] = None) -> dict:
+    return _post(api_key, "/api/email/reply", {
+        "thread_id": thread_id, "message_id": message_id, "body": body,
+        "cc": cc or [],
+    })
 
 
-def list_calendar_events(api_key: str, start: str, end: str) -> list[dict]:
-    data = _get(api_key, "/api/calendar/events", {"start": start, "end": end})
-    return data["events"]
+def forward_email(api_key: str, thread_id: str, message_id: str,
+                  to: list[str], body: str, cc: list[str] = None) -> dict:
+    return _post(api_key, "/api/email/forward", {
+        "thread_id": thread_id, "message_id": message_id,
+        "to": to, "body": body, "cc": cc or [],
+    })
+
+
+def get_thread(api_key: str, thread_id: str,
+               include_attachments: bool = False) -> dict:
+    return _get(api_key, f"/api/email/thread/{thread_id}",
+                {"include_attachments": str(include_attachments).lower()})
+
+
+def mark_read(api_key: str, message_id: str) -> dict:
+    return _post(api_key, "/api/email/mark-read", {"message_id": message_id})
+
+
+def mark_unread(api_key: str, message_id: str) -> dict:
+    return _post(api_key, "/api/email/mark-unread", {"message_id": message_id})
+
+
+def get_attachment(api_key: str, message_id: str, attachment_id: str) -> dict:
+    return _get(api_key, "/api/email/attachment",
+                {"message_id": message_id, "attachment_id": attachment_id})
+
+
+# ── Calendar ─────────────────────────────────────────────────────────────
+
+def list_calendars(api_key: str) -> dict:
+    return _get(api_key, "/api/calendar/list")
+
+
+def list_calendar_events(api_key: str, start: str, end: str,
+                         calendar_id: str = "primary",
+                         max_results: int = 50) -> dict:
+    return _get(api_key, "/api/calendar/events", {
+        "start": start, "end": end,
+        "calendar_id": calendar_id, "max_results": max_results,
+    })
 
 
 def create_calendar_event(api_key: str, summary: str, start: str, end: str,
                           timezone: str = "UTC", description: str = None,
-                          location: str = None, attendees: list[str] = None) -> dict:
+                          location: str = None, attendees: list[str] = None,
+                          calendar_id: str = "primary") -> dict:
     return _post(api_key, "/api/calendar/events", {
         "summary": summary, "start": start, "end": end,
         "timezone": timezone, "description": description,
         "location": location, "attendees": attendees or [],
+        "calendar_id": calendar_id,
     })
 
 
-def get_availability(api_key: str, start: str, end: str, duration_minutes: int = 30) -> list[dict]:
-    data = _get(api_key, "/api/calendar/availability", {
-        "start": start, "end": end, "duration_minutes": duration_minutes,
+def update_calendar_event(api_key: str, event_id: str,
+                          summary: str = None, start: str = None, end: str = None,
+                          timezone: str = None, description: str = None,
+                          location: str = None, attendees: list[str] = None,
+                          calendar_id: str = "primary") -> dict:
+    return _patch(api_key, f"/api/calendar/events/{event_id}", {
+        k: v for k, v in {
+            "summary": summary, "start": start, "end": end,
+            "timezone": timezone, "description": description,
+            "location": location, "attendees": attendees,
+            "calendar_id": calendar_id,
+        }.items() if v is not None
     })
-    return data["slots"]
+
+
+def delete_calendar_event(api_key: str, event_id: str,
+                          calendar_id: str = "primary") -> dict:
+    return _delete(api_key, f"/api/calendar/events/{event_id}",
+                   {"calendar_id": calendar_id})
+
+
+def get_availability(api_key: str, start: str, end: str,
+                     duration_minutes: int = 30,
+                     calendar_id: str = "primary") -> dict:
+    return _get(api_key, "/api/calendar/availability", {
+        "start": start, "end": end,
+        "duration_minutes": duration_minutes, "calendar_id": calendar_id,
+    })

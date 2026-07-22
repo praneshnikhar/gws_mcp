@@ -27,7 +27,7 @@ from backend.api import gmail, calendar
 
 class JSONFormatter:
     def format(self, record: logging.LogRecord) -> str:
-        import json
+        import json as _json
         log = {
             "t": record.created,
             "level": record.levelname,
@@ -38,7 +38,7 @@ class JSONFormatter:
             log["req_id"] = record.req_id
         if record.exc_info and record.exc_info[0]:
             log["exc"] = self._format_exc(record.exc_info)
-        return json.dumps(log, default=str)
+        return _json.dumps(log, default=str)
 
     def _format_exc(self, exc_info):
         import traceback
@@ -136,11 +136,17 @@ async def email_list(
     request: Request,
     max_results: int = 20,
     query: str = "",
+    page_token: str | None = None,
     user: dict = Depends(require_user),
 ):
     try:
-        messages = gmail.list_messages(user["google_token"], max_results, query, email=user["email"])
-        return {"messages": messages}
+        messages, next_page_token = gmail.list_messages(
+            user["google_token"], max_results, query, page_token, email=user["email"],
+        )
+        result = {"messages": messages}
+        if next_page_token:
+            result["next_page_token"] = next_page_token
+        return result
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -170,6 +176,72 @@ async def email_send(
             body=body["body"],
             cc=body.get("cc"),
             bcc=body.get("bcc"),
+            attachments=body.get("attachments"),
+            email=user["email"],
+        )
+        return result
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/email/reply")
+@limiter.limit("30/minute")
+async def email_reply(
+    request: Request,
+    body: dict,
+    user: dict = Depends(require_user),
+):
+    errors = []
+    if not body.get("thread_id"):
+        errors.append("Field 'thread_id' is required")
+    if not body.get("message_id"):
+        errors.append("Field 'message_id' is required")
+    if not body.get("body"):
+        errors.append("Field 'body' is required")
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors))
+
+    try:
+        result = gmail.reply_message(
+            user["google_token"],
+            thread_id=body["thread_id"],
+            message_id=body["message_id"],
+            body=body["body"],
+            cc=body.get("cc"),
+            email=user["email"],
+        )
+        return result
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/email/forward")
+@limiter.limit("30/minute")
+async def email_forward(
+    request: Request,
+    body: dict,
+    user: dict = Depends(require_user),
+):
+    errors = []
+    if not body.get("thread_id"):
+        errors.append("Field 'thread_id' is required")
+    if not body.get("message_id"):
+        errors.append("Field 'message_id' is required")
+    if not body.get("to"):
+        errors.append("Field 'to' is required")
+    if not body.get("body"):
+        errors.append("Field 'body' is required")
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors))
+
+    try:
+        result = gmail.forward_message(
+            user["google_token"],
+            thread_id=body["thread_id"],
+            message_id=body["message_id"],
+            to=body["to"],
+            body=body["body"],
+            cc=body.get("cc"),
             email=user["email"],
         )
         return result
@@ -181,16 +253,81 @@ async def email_send(
 async def email_thread(
     request: Request,
     thread_id: str,
+    include_attachments: bool = False,
     user: dict = Depends(require_user),
 ):
     try:
-        messages = gmail.get_thread(user["google_token"], thread_id, email=user["email"])
+        messages = gmail.get_thread(
+            user["google_token"], thread_id, include_attachments, email=user["email"],
+        )
         return {"messages": messages}
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
 
+@app.post("/api/email/mark-read")
+@limiter.limit("60/minute")
+async def email_mark_read(
+    request: Request,
+    body: dict,
+    user: dict = Depends(require_user),
+):
+    if not body.get("message_id"):
+        raise HTTPException(status_code=422, detail="Field 'message_id' is required")
+    try:
+        result = gmail.mark_read(user["google_token"], body["message_id"], email=user["email"])
+        return result
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/email/mark-unread")
+@limiter.limit("60/minute")
+async def email_mark_unread(
+    request: Request,
+    body: dict,
+    user: dict = Depends(require_user),
+):
+    if not body.get("message_id"):
+        raise HTTPException(status_code=422, detail="Field 'message_id' is required")
+    try:
+        result = gmail.mark_unread(user["google_token"], body["message_id"], email=user["email"])
+        return result
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/email/attachment")
+@limiter.limit("60/minute")
+async def email_attachment(
+    request: Request,
+    message_id: str,
+    attachment_id: str,
+    user: dict = Depends(require_user),
+):
+    try:
+        result = gmail.get_attachment(
+            user["google_token"], message_id, attachment_id, email=user["email"],
+        )
+        return result
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 # ── Calendar routes ──────────────────────────────────────────────────────
+
+@app.get("/api/calendar/list")
+@limiter.limit("30/minute")
+async def calendar_list(
+    request: Request,
+    user: dict = Depends(require_user),
+):
+    try:
+        calendars = calendar.list_calendars(user["google_token"], email=user["email"])
+        return {"calendars": calendars}
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
 
 @app.get("/api/calendar/events")
 @limiter.limit("60/minute")
@@ -198,10 +335,15 @@ async def calendar_events(
     request: Request,
     start: str,
     end: str,
+    calendar_id: str = "primary",
+    max_results: int = 50,
     user: dict = Depends(require_user),
 ):
     try:
-        events = calendar.list_events(user["google_token"], start, end, email=user["email"])
+        events = calendar.list_events(
+            user["google_token"], start, end, calendar_id=calendar_id,
+            max_results=max_results, email=user["email"],
+        )
         return {"events": events}
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -234,8 +376,54 @@ async def calendar_create_event(
             description=body.get("description"),
             location=body.get("location"),
             attendees=body.get("attendees"),
+            calendar_id=body.get("calendar_id", "primary"),
+            email=user["email"],
         )
         return event
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.patch("/api/calendar/events/{event_id}")
+@limiter.limit("30/minute")
+async def calendar_update_event(
+    request: Request,
+    event_id: str,
+    body: dict,
+    user: dict = Depends(require_user),
+):
+    try:
+        event = calendar.update_event(
+            user["google_token"],
+            event_id=event_id,
+            summary=body.get("summary"),
+            start=body.get("start"),
+            end=body.get("end"),
+            timezone=body.get("timezone"),
+            description=body.get("description"),
+            location=body.get("location"),
+            attendees=body.get("attendees"),
+            calendar_id=body.get("calendar_id", "primary"),
+            email=user["email"],
+        )
+        return event
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.delete("/api/calendar/events/{event_id}")
+@limiter.limit("30/minute")
+async def calendar_delete_event(
+    request: Request,
+    event_id: str,
+    calendar_id: str = "primary",
+    user: dict = Depends(require_user),
+):
+    try:
+        calendar.delete_event(
+            user["google_token"], event_id, calendar_id=calendar_id, email=user["email"],
+        )
+        return {"deleted": True}
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -247,11 +435,13 @@ async def calendar_availability(
     start: str,
     end: str,
     duration_minutes: int = 30,
+    calendar_id: str = "primary",
     user: dict = Depends(require_user),
 ):
     try:
         slots = calendar.get_availability(
-            user["google_token"], start, end, duration_minutes, email=user["email"],
+            user["google_token"], start, end, duration_minutes,
+            calendar_id=calendar_id, email=user["email"],
         )
         return {"slots": slots}
     except RuntimeError as e:
