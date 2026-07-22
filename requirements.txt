@@ -1,0 +1,2 @@
+connectors-backend @ file://backend
+connectors-mcp @ file://mcp-server
